@@ -50,6 +50,7 @@
 #include "hw/qdev-clock.h"
 #include "qobject/qlist.h"
 #include "qom/object.h"
+#include "hw/display/mps2-fb.h"
 
 typedef enum MPS2FPGAType {
     FPGA_AN385,
@@ -259,7 +260,10 @@ static void mps2_common_init(MachineState *machine)
                                 0x40020000, 0x00010000);
 
     create_unimplemented_device("RESERVED 4", 0x40030000, 0x001D0000);
-    create_unimplemented_device("VGA", 0x41000000, 0x0200000);
+    /* Framebuffer */
+    DeviceState *fbdev = qdev_new("next-fb");
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(fbdev), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(fbdev), 0, 0x41000000);
 
     switch (mmc->fpga_type) {
     case FPGA_AN385:
