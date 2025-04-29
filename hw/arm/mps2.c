@@ -261,7 +261,7 @@ static void mps2_common_init(MachineState *machine)
 
     create_unimplemented_device("RESERVED 4", 0x40030000, 0x001D0000);
     /* Framebuffer */
-    DeviceState *fbdev = qdev_new("next-fb");
+    DeviceState *fbdev = qdev_new("mps2-fb");
     sysbus_realize_and_unref(SYS_BUS_DEVICE(fbdev), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(fbdev), 0, 0x41000000);
 
