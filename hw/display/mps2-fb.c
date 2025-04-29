@@ -47,41 +47,23 @@ struct MPS2FBState {
 static void mps2fb_draw_line(void *opaque, uint8_t *d, const uint8_t *s,
                              int width, int pitch)
 {
-    MPS2FBState *nfbstate = MPS2FB(opaque);
-    static const uint32_t pal[4] = {
-        0xFFFFFFFF, 0xFFAAAAAA, 0xFF555555, 0xFF000000
-    };
-    uint32_t *buf = (uint32_t *)d;
-    int i = 0;
-
-    for (i = 0; i < nfbstate->cols / 4; i++) {
-        int j = i * 4;
-        uint8_t src = s[i];
-        buf[j + 3] = pal[src & 0x3];
-        src >>= 2;
-        buf[j + 2] = pal[src & 0x3];
-        src >>= 2;
-        buf[j + 1] = pal[src & 0x3];
-        src >>= 2;
-        buf[j + 0] = pal[src & 0x3];
-    }
+    /* Assume s is already in 32 BPP format */
+    memcpy(d, s, width * 4);  // 4 bytes per pixel
 }
 
 static void mps2fb_update(void *opaque)
 {
     MPS2FBState *s = MPS2FB(opaque);
-    int dest_width = 4;
-    int src_width;
-    int first = 0;
-    int last  = 0;
+    int bytes_per_pixel = 4; // 32 BPP
+    int src_width = s->cols * bytes_per_pixel;
+    int dest_width = src_width;
+    int first = 0, last = 0;
     DisplaySurface *surface = qemu_console_surface(s->con);
-
-    src_width = s->cols / 4 + 8;
-    dest_width = s->cols * 4;
 
     if (s->invalidate) {
         framebuffer_update_memory_section(&s->fbsection, &s->fb_mr, 0,
-                                          s->cols, src_width);
+                                         s->cols * bytes_per_pixel,
+                                         s->rows);
         s->invalidate = 0;
     }
 
@@ -106,14 +88,14 @@ static const GraphicHwOps mps2fb_ops = {
 static void mps2fb_realize(DeviceState *dev, Error **errp)
 {
     MPS2FBState *s = MPS2FB(dev);
+    size_t fb_size = 640 * 480 * 4; // 32 BPP
 
-    memory_region_init_ram(&s->fb_mr, OBJECT(dev), "mps2-video", 0x1CB100,
-                           &error_fatal);
+    memory_region_init_ram(&s->fb_mr, OBJECT(dev), "mps2-video", fb_size, errp);
     sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->fb_mr);
 
     s->invalidate = 1;
-    s->cols = 1120;
-    s->rows = 832;
+    s->cols = 640;
+    s->rows = 480;
 
     s->con = graphic_console_init(dev, 0, &mps2fb_ops, s);
     qemu_console_resize(s->con, s->cols, s->rows);
