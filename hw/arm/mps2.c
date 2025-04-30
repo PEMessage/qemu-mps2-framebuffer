@@ -50,7 +50,6 @@
 #include "hw/qdev-clock.h"
 #include "qobject/qlist.h"
 #include "qom/object.h"
-#include "hw/display/mps2-fb.h"
 
 typedef enum MPS2FPGAType {
     FPGA_AN385,
