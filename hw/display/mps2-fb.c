@@ -28,6 +28,7 @@
 #include "framebuffer.h"
 #include "ui/pixel_ops.h"
 #include "qom/object.h"
+#include "qemu/log.h"
 
 #define TYPE_MPS2FB "mps2-fb"
 OBJECT_DECLARE_SIMPLE_TYPE(MPS2FBState, MPS2FB)
@@ -42,6 +43,8 @@ struct MPS2FBState {
     uint32_t cols;
     uint32_t rows;
     int invalidate;
+
+    QemuInputHandlerState *touch_handler;
 };
 
 static void mps2fb_draw_line(void *opaque, uint8_t *d, const uint8_t *s,
@@ -85,6 +88,37 @@ static const GraphicHwOps mps2fb_ops = {
     .gfx_update  = mps2fb_update,
 };
 
+static void mps2fb_touch_event(DeviceState *dev,
+                              QemuConsole *con,
+                              InputEvent *evt)
+{
+    MPS2FBState *s = MPS2FB(dev);
+    if (evt->type == INPUT_EVENT_KIND_ABS) {
+        InputAxis axis;
+        int value;
+
+        // Extract axis and value from the event
+        axis = evt->u.abs.data->axis;
+        value = evt->u.abs.data->value;
+
+        if (axis == INPUT_AXIS_X || axis == INPUT_AXIS_Y) {
+            int range = (axis == INPUT_AXIS_X) ? s->cols : s->rows;
+            int abs_value = (value * 0x7FFF) / range;
+            (void)abs_value;
+            // qemu_log("Touch axis: %d, value: %d\n", axis, abs_value);
+            // qemu_input_queue_abs(con, axis, abs_value, 0, 0x7FFF);
+        }
+    }
+}
+
+// Define the input handlers for our console
+
+static const QemuInputHandler mps2_touch_handler = {
+    .name  = "mps2-touchscreen",
+    .mask  = INPUT_EVENT_MASK_ABS,
+    .event = mps2fb_touch_event,
+};
+
 static void mps2fb_realize(DeviceState *dev, Error **errp)
 {
     MPS2FBState *s = MPS2FB(dev);
@@ -99,6 +133,8 @@ static void mps2fb_realize(DeviceState *dev, Error **errp)
 
     s->con = graphic_console_init(dev, 0, &mps2fb_ops, s);
     qemu_console_resize(s->con, s->cols, s->rows);
+
+    s->touch_handler = qemu_input_handler_register(dev, &mps2_touch_handler);
 }
 
 static void mps2fb_class_init(ObjectClass *oc, const void *data)
