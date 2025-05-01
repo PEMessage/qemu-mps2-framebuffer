@@ -31,22 +31,40 @@
 #include "qemu/log.h"
 
 #include "hw/qdev-properties.h"
+#include "hw/sysbus.h"
+#include "hw/registerfields.h"
 
 #define TYPE_MPS2FB "mps2-fb"
 OBJECT_DECLARE_SIMPLE_TYPE(MPS2FBState, MPS2FB)
 
+#define CONTROL_REGION_SIZE 4096
+#define TOUCH_X_OFFSET     0
+#define TOUCH_Y_OFFSET     4
+#define TOUCH_PRESS_OFFSET 8
+
 struct MPS2FBState {
     SysBusDevice parent_obj;
 
+    /* Control region (touch data) */
+    MemoryRegion control_mr;
+
+    /* Framebuffer memory */
     MemoryRegion fb_mr;
     MemoryRegionSection fbsection;
+    
+    
     QemuConsole *con;
 
     uint32_t cols;
     uint32_t rows;
     int invalidate;
 
+    /* Touch state */
     QemuInputHandlerState *touch_handler;
+    
+    uint16_t touch_x;
+    uint16_t touch_y;
+    uint8_t touch_pressed;
 };
 
 // Add property handling prototypes
@@ -55,6 +73,51 @@ static const Property mps2fb_properties[] = {
     DEFINE_PROP_UINT32("rows", MPS2FBState, rows, 480),
 };
 
+static uint64_t control_region_read(void *opaque, hwaddr addr, unsigned size)
+{
+    MPS2FBState *s = opaque;
+    uint64_t val = 0;
+
+    switch (addr) {
+    case TOUCH_X_OFFSET:
+        val = s->touch_x;
+        break;
+    case TOUCH_Y_OFFSET:
+        val = s->touch_y;
+        break;
+    case TOUCH_PRESS_OFFSET:
+        val = s->touch_pressed;
+        break;
+    default:
+        qemu_log_mask(LOG_UNIMP, "%s: unimplemented read at 0x%"HWADDR_PRIx"\n",
+                      __func__, addr);
+        break;
+    }
+
+    return val;
+}
+
+static void control_region_write(void *opaque, hwaddr addr, uint64_t val,
+                                unsigned size)
+{
+    /* Most control registers are read-only, except maybe for future extensions */
+    qemu_log_mask(LOG_UNIMP, "%s: unimplemented write at 0x%"HWADDR_PRIx"\n",
+                  __func__, addr);
+}
+
+static const MemoryRegionOps control_region_ops = {
+    .read = control_region_read,
+    .write = control_region_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .valid = {
+        .min_access_size = 1,
+        .max_access_size = 4,
+    },
+    .impl = {
+        .min_access_size = 1,
+        .max_access_size = 4,
+    },
+};
 
 static void mps2fb_draw_line(void *opaque, uint8_t *d, const uint8_t *s,
                              int width, int pitch)
@@ -102,20 +165,21 @@ static void mps2fb_touch_event(DeviceState *dev,
                               InputEvent *evt)
 {
     MPS2FBState *s = MPS2FB(dev);
-    if (evt->type == INPUT_EVENT_KIND_ABS) {
-        InputAxis axis;
-        int value;
-
-        // Extract axis and value from the event
-        axis = evt->u.abs.data->axis;
-        value = evt->u.abs.data->value;
-
-        if (axis == INPUT_AXIS_X || axis == INPUT_AXIS_Y) {
-            int range = (axis == INPUT_AXIS_X) ? s->cols : s->rows;
-            int abs_value = (value * 0x7FFF) / range;
-            (void)abs_value; // wait for feature
-            // qemu_log("Touch axis: %d, value: %d\n", axis, abs_value);
-            // qemu_input_queue_abs(con, axis, abs_value, 0, 0x7FFF);
+    
+    if (evt->type == INPUT_EVENT_KIND_BTN) {
+        if (evt->u.btn.data->button == INPUT_BUTTON_LEFT) {
+            s->touch_pressed = evt->u.btn.data->down ? 1 : 0;
+        }
+    } else if (evt->type == INPUT_EVENT_KIND_ABS) {
+        InputAxis axis = evt->u.abs.data->axis;
+        int value = evt->u.abs.data->value;
+        int range = (axis == INPUT_AXIS_X) ? s->cols : s->rows;
+        uint64_t scaled_value = ((uint64_t)value * (uint64_t)range) /  (uint64_t)INPUT_EVENT_ABS_MAX;
+        
+        if (axis == INPUT_AXIS_X) {
+            s->touch_x = scaled_value;
+        } else if (axis == INPUT_AXIS_Y) {
+            s->touch_y = scaled_value;
         }
     }
 }
@@ -124,7 +188,7 @@ static void mps2fb_touch_event(DeviceState *dev,
 
 static const QemuInputHandler mps2_touch_handler = {
     .name  = "mps2-touchscreen",
-    .mask  = INPUT_EVENT_MASK_ABS,
+    .mask  = INPUT_EVENT_MASK_BTN | INPUT_EVENT_MASK_ABS,
     .event = mps2fb_touch_event,
 };
 
@@ -133,13 +197,23 @@ static void mps2fb_realize(DeviceState *dev, Error **errp)
     MPS2FBState *s = MPS2FB(dev);
     size_t fb_size = s->cols * s->rows * 4;
 
-    memory_region_init_ram(&s->fb_mr, OBJECT(dev), "mps2-video", fb_size, errp);
+    /* Initialize framebuffer memory */
+    memory_region_init_ram(&s->fb_mr, OBJECT(dev), "mps2-fb", fb_size, errp);
+    
+    /* Initialize control region */
+    memory_region_init_io(&s->control_mr, OBJECT(dev), &control_region_ops, s,
+                         "mps2-fb-control", CONTROL_REGION_SIZE);
+
+    /* Map both regions */
+    sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->control_mr);
     sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->fb_mr);
 
-    s->invalidate = 1;
-    // s->cols = 640;
-    // s->rows = 480;
+    /* Initialize touch state */
+    s->touch_x = 0;
+    s->touch_y = 0;
+    s->touch_pressed = 0;
 
+    s->invalidate = 1;
     s->con = graphic_console_init(dev, 0, &mps2fb_ops, s);
     qemu_console_resize(s->con, s->cols, s->rows);
 

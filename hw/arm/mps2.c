@@ -263,6 +263,7 @@ static void mps2_common_init(MachineState *machine)
     DeviceState *fbdev = qdev_new("mps2-fb");
     sysbus_realize_and_unref(SYS_BUS_DEVICE(fbdev), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(fbdev), 0, 0x41000000);
+    sysbus_mmio_map(SYS_BUS_DEVICE(fbdev), 1, 0x41001000);
 
     switch (mmc->fpga_type) {
     case FPGA_AN385:
