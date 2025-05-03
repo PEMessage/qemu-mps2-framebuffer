@@ -114,7 +114,7 @@ static const MemoryRegionOps control_region_ops = {
         .max_access_size = 4,
     },
     .impl = {
-        .min_access_size = 1,
+        .min_access_size = 4,
         .max_access_size = 4,
     },
 };
@@ -234,7 +234,7 @@ static void mps2fb_class_init(ObjectClass *oc, const void *data)
 
 static const TypeInfo mps2fb_info = {
     .name          = TYPE_MPS2FB,
-    .parent        = TYPE_SYS_BUS_DEVICE,
+    .parent        = TYPE_DYNAMIC_SYS_BUS_DEVICE,
     .instance_size = sizeof(MPS2FBState),
     .class_init    = mps2fb_class_init,
 };

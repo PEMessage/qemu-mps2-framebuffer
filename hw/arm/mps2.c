@@ -261,6 +261,8 @@ static void mps2_common_init(MachineState *machine)
     create_unimplemented_device("RESERVED 4", 0x40030000, 0x001D0000);
     /* Framebuffer */
     DeviceState *fbdev = qdev_new("mps2-fb");
+    qdev_prop_set_uint32(fbdev, "cols", 640);
+    qdev_prop_set_uint32(fbdev, "rows", 480);
     sysbus_realize_and_unref(SYS_BUS_DEVICE(fbdev), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(fbdev), 0, 0x41000000);
     sysbus_mmio_map(SYS_BUS_DEVICE(fbdev), 1, 0x41001000);
@@ -471,6 +473,8 @@ static void mps2_common_init(MachineState *machine)
 static void mps2_class_init(ObjectClass *oc, const void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
+
+    machine_class_allow_dynamic_sysbus_dev(mc, "mps2-fb");
 
     mc->init = mps2_common_init;
     mc->max_cpus = 1;
