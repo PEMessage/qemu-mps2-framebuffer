@@ -42,6 +42,10 @@ OBJECT_DECLARE_SIMPLE_TYPE(MPS2FBState, MPS2FB)
 #define TOUCH_Y_OFFSET     4
 #define TOUCH_PRESS_OFFSET 8
 
+// #define TOUCH_COUNT_OFFSET 12
+// #define TOUCH_SLOT_SIZE    16
+// #define MAX_TOUCH_POINTS   10
+
 struct MPS2FBState {
     SysBusDevice parent_obj;
 
@@ -51,8 +55,8 @@ struct MPS2FBState {
     /* Framebuffer memory */
     MemoryRegion fb_mr;
     MemoryRegionSection fbsection;
-    
-    
+
+
     QemuConsole *con;
 
     uint32_t cols;
@@ -61,7 +65,7 @@ struct MPS2FBState {
 
     /* Touch state */
     QemuInputHandlerState *touch_handler;
-    
+
     uint16_t touch_x;
     uint16_t touch_y;
     uint8_t touch_pressed;
@@ -165,8 +169,14 @@ static void mps2fb_touch_event(DeviceState *dev,
                               InputEvent *evt)
 {
     MPS2FBState *s = MPS2FB(dev);
-    
-    if (evt->type == INPUT_EVENT_KIND_BTN) {
+
+    if (evt->type == INPUT_EVENT_KIND_MTT) {
+        /* Multi-touch event */
+        InputMultiTouchEvent *mt = evt->u.mtt.data;
+        qemu_log_mask(LOG_UNIMP, "%s: unimplemented mt->type %d\n",
+                __func__, mt->type);
+
+    } else if (evt->type == INPUT_EVENT_KIND_BTN) {
         if (evt->u.btn.data->button == INPUT_BUTTON_LEFT) {
             s->touch_pressed = evt->u.btn.data->down ? 1 : 0;
         }
@@ -175,7 +185,7 @@ static void mps2fb_touch_event(DeviceState *dev,
         int value = evt->u.abs.data->value;
         int range = (axis == INPUT_AXIS_X) ? s->cols : s->rows;
         uint64_t scaled_value = ((uint64_t)value * (uint64_t)range) /  (uint64_t)INPUT_EVENT_ABS_MAX;
-        
+
         if (axis == INPUT_AXIS_X) {
             s->touch_x = scaled_value;
         } else if (axis == INPUT_AXIS_Y) {
@@ -188,7 +198,7 @@ static void mps2fb_touch_event(DeviceState *dev,
 
 static const QemuInputHandler mps2_touch_handler = {
     .name  = "mps2-touchscreen",
-    .mask  = INPUT_EVENT_MASK_BTN | INPUT_EVENT_MASK_ABS,
+    .mask  = INPUT_EVENT_MASK_BTN | INPUT_EVENT_MASK_ABS | INPUT_EVENT_MASK_MTT,
     .event = mps2fb_touch_event,
 };
 
@@ -199,7 +209,7 @@ static void mps2fb_realize(DeviceState *dev, Error **errp)
 
     /* Initialize framebuffer memory */
     memory_region_init_ram(&s->fb_mr, OBJECT(dev), "mps2-fb", fb_size, errp);
-    
+
     /* Initialize control region */
     memory_region_init_io(&s->control_mr, OBJECT(dev), &control_region_ops, s,
                          "mps2-fb-control", CONTROL_REGION_SIZE);
