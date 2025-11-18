@@ -40,10 +40,23 @@ OBJECT_DECLARE_SIMPLE_TYPE(MPS2FBState, MPS2FB)
 
 #define CONTROL_REGION_SIZE 4096
 #define TOUCH_CTRL_OFFSET   0
-#define TOUCH_X_OFFSET      4
-#define TOUCH_Y_OFFSET      8
-#define TOUCH_PRESS_OFFSET  12
+#define TOUCH_X_OFFSET     4
+#define TOUCH_Y_OFFSET     8
+#define TOUCH_PRESS_OFFSET 12
 
+/* Control register bit definitions */
+#define CONTROL_ENABLE_IRQ_MASK  (1u << 0)
+#define CONTROL_RESERVED_MASK    (~CONTROL_ENABLE_IRQ_MASK)
+
+// #define TOUCH_COUNT_OFFSET 12
+// #define TOUCH_SLOT_SIZE    16
+// #define MAX_TOUCH_POINTS   10
+
+/* Control register structure */
+typedef struct {
+    unsigned int enable_irq :1;     /* Bit 0: Enable touch interrupt */
+    unsigned int reserved   :31;    /* Bits 1-31: Reserved for future features */
+} MPS2FBCtrl;
 
 struct MPS2FBState {
     SysBusDevice parent_obj;
@@ -71,7 +84,7 @@ struct MPS2FBState {
 
     /* IRQ support */
     qemu_irq touch_irq;
-    uint8_t touch_irq_enable;
+    MPS2FBCtrl ctrl;
 };
 
 // Add property handling prototypes
@@ -82,7 +95,7 @@ static const Property mps2fb_properties[] = {
 
 static void mps2fb_update_irq(MPS2FBState *s)
 {
-    if (s->touch_irq_enable) {
+    if (s->ctrl.enable_irq) {
         qemu_irq_pulse(s->touch_irq);
     }
 }
@@ -94,7 +107,7 @@ static uint64_t control_region_read(void *opaque, hwaddr addr, unsigned size)
 
     switch (addr) {
     case TOUCH_CTRL_OFFSET:
-        val = s->touch_irq_enable;
+        val = *(uint32_t *)&s->ctrl;
         break;
     case TOUCH_X_OFFSET:
         val = s->touch_x;
@@ -121,7 +134,12 @@ static void control_region_write(void *opaque, hwaddr addr, uint64_t val,
 
     switch (addr) {
     case TOUCH_CTRL_OFFSET:
-        s->touch_irq_enable = val;
+        *(uint32_t *)&s->ctrl = (uint32_t)val;
+        qemu_log_mask(LOG_UNIMP,
+                "enable_irq %d, reserved %d\n",
+                s->ctrl.enable_irq,
+                s->ctrl.reserved
+                );
         break;
     default:
         qemu_log_mask(LOG_UNIMP, "%s: unimplemented write at 0x%"HWADDR_PRIx"\n",
@@ -255,7 +273,8 @@ static void mps2fb_realize(DeviceState *dev, Error **errp)
     sysbus_init_irq(SYS_BUS_DEVICE(dev), &s->touch_irq);
 
     /* Initialize touch state */
-    s->touch_irq_enable = 0;
+    s->ctrl.enable_irq = 0;
+    s->ctrl.reserved = 0;
     s->touch_x = 0;
     s->touch_y = 0;
     s->touch_pressed = 0;
