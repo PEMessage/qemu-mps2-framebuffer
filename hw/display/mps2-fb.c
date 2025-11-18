@@ -33,18 +33,17 @@
 #include "hw/qdev-properties.h"
 #include "hw/sysbus.h"
 #include "hw/registerfields.h"
+#include "hw/irq.h"
 
 #define TYPE_MPS2FB "mps2-fb"
 OBJECT_DECLARE_SIMPLE_TYPE(MPS2FBState, MPS2FB)
 
 #define CONTROL_REGION_SIZE 4096
-#define TOUCH_X_OFFSET     0
-#define TOUCH_Y_OFFSET     4
-#define TOUCH_PRESS_OFFSET 8
+#define TOUCH_CTRL_OFFSET   0
+#define TOUCH_X_OFFSET      4
+#define TOUCH_Y_OFFSET      8
+#define TOUCH_PRESS_OFFSET  12
 
-// #define TOUCH_COUNT_OFFSET 12
-// #define TOUCH_SLOT_SIZE    16
-// #define MAX_TOUCH_POINTS   10
 
 struct MPS2FBState {
     SysBusDevice parent_obj;
@@ -69,6 +68,10 @@ struct MPS2FBState {
     uint16_t touch_x;
     uint16_t touch_y;
     uint8_t touch_pressed;
+
+    /* IRQ support */
+    qemu_irq touch_irq;
+    uint8_t touch_irq_enable;
 };
 
 // Add property handling prototypes
@@ -77,12 +80,22 @@ static const Property mps2fb_properties[] = {
     DEFINE_PROP_UINT32("rows", MPS2FBState, rows, 480),
 };
 
+static void mps2fb_update_irq(MPS2FBState *s)
+{
+    if (s->touch_irq_enable) {
+        qemu_irq_pulse(s->touch_irq);
+    }
+}
+
 static uint64_t control_region_read(void *opaque, hwaddr addr, unsigned size)
 {
     MPS2FBState *s = opaque;
     uint64_t val = 0;
 
     switch (addr) {
+    case TOUCH_CTRL_OFFSET:
+        val = s->touch_irq_enable;
+        break;
     case TOUCH_X_OFFSET:
         val = s->touch_x;
         break;
@@ -104,9 +117,17 @@ static uint64_t control_region_read(void *opaque, hwaddr addr, unsigned size)
 static void control_region_write(void *opaque, hwaddr addr, uint64_t val,
                                 unsigned size)
 {
-    /* Most control registers are read-only, except maybe for future extensions */
-    qemu_log_mask(LOG_UNIMP, "%s: unimplemented write at 0x%"HWADDR_PRIx"\n",
+    MPS2FBState *s = opaque;
+
+    switch (addr) {
+    case TOUCH_CTRL_OFFSET:
+        s->touch_irq_enable = val;
+        break;
+    default:
+        qemu_log_mask(LOG_UNIMP, "%s: unimplemented write at 0x%"HWADDR_PRIx"\n",
                   __func__, addr);
+        break;
+    }
 }
 
 static const MemoryRegionOps control_region_ops = {
@@ -169,6 +190,7 @@ static void mps2fb_touch_event(DeviceState *dev,
                               InputEvent *evt)
 {
     MPS2FBState *s = MPS2FB(dev);
+    int touch_state_changed = 0;
 
     if (evt->type == INPUT_EVENT_KIND_MTT) {
         /* Multi-touch event */
@@ -178,7 +200,9 @@ static void mps2fb_touch_event(DeviceState *dev,
 
     } else if (evt->type == INPUT_EVENT_KIND_BTN) {
         if (evt->u.btn.data->button == INPUT_BUTTON_LEFT) {
+            uint8_t old_pressed = s->touch_pressed;
             s->touch_pressed = evt->u.btn.data->down ? 1 : 0;
+            touch_state_changed = (old_pressed != s->touch_pressed);
         }
     } else if (evt->type == INPUT_EVENT_KIND_ABS) {
         InputAxis axis = evt->u.abs.data->axis;
@@ -187,10 +211,19 @@ static void mps2fb_touch_event(DeviceState *dev,
         uint64_t scaled_value = ((uint64_t)value * (uint64_t)range) /  (uint64_t)INPUT_EVENT_ABS_MAX;
 
         if (axis == INPUT_AXIS_X) {
+            uint16_t old_x = s->touch_x;
             s->touch_x = scaled_value;
+            touch_state_changed = (old_x != s->touch_x);
         } else if (axis == INPUT_AXIS_Y) {
+            uint16_t old_y = s->touch_y;
             s->touch_y = scaled_value;
+            touch_state_changed = (old_y != s->touch_y);
         }
+    }
+
+    /* Generate IRQ if touch state changed and IRQ is enabled */
+    if (touch_state_changed) {
+        mps2fb_update_irq(s);
     }
 }
 
@@ -218,7 +251,11 @@ static void mps2fb_realize(DeviceState *dev, Error **errp)
     sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->control_mr);
     sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->fb_mr);
 
+    /* Initialize IRQ */
+    sysbus_init_irq(SYS_BUS_DEVICE(dev), &s->touch_irq);
+
     /* Initialize touch state */
+    s->touch_irq_enable = 0;
     s->touch_x = 0;
     s->touch_y = 0;
     s->touch_pressed = 0;

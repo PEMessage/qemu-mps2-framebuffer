@@ -267,6 +267,9 @@ static void mps2_common_init(MachineState *machine)
     sysbus_mmio_map(SYS_BUS_DEVICE(fbdev), 0, 0x41000000);
     sysbus_mmio_map(SYS_BUS_DEVICE(fbdev), 1, 0x41001000);
 
+    /* Connect touch IRQ */
+    sysbus_connect_irq(SYS_BUS_DEVICE(fbdev), 0, qdev_get_gpio_in(armv7m, 31));
+
     switch (mmc->fpga_type) {
     case FPGA_AN385:
     case FPGA_AN386:
