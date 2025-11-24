@@ -52,7 +52,9 @@ OBJECT_DECLARE_SIMPLE_TYPE(MPS2FBState, MPS2FB)
 #define POINT_ID_OFFSET     12
 
 /* Maximum number of touch points supported */
-#define MAX_TOUCH_POINTS    5
+#define MAX_TOUCH_POINTS    10
+#define MULTI_TOUCH_SLOT_OFFSET -1
+#define MOUSE_SLOT 0
 
 /* Touch header bit definitions */
 #define TOUCH_HEADER_NUM_POINTS_MASK  0x1F  /* Bits 0-4: Number of active points */
@@ -64,10 +66,10 @@ OBJECT_DECLARE_SIMPLE_TYPE(MPS2FBState, MPS2FB)
 
 /* Touch point structure */
 typedef struct {
-    uint16_t x;
-    uint16_t y;
-    uint8_t pressed;
-    uint8_t track_id;
+    uint32_t x;
+    uint32_t y;
+    uint32_t pressed;
+    int32_t track_id;
 } MPS2FBTouchPoint;
 
 /* Control register structure */
@@ -78,8 +80,8 @@ typedef struct {
 
 /* Touch header structure */
 typedef struct {
-    unsigned int num_points :5;     /* Bits 0-4: Number of active touch points */
-    unsigned int reserved   :27;    /* Bits 5-31: Reserved for future features */
+    unsigned int points_mask :16;     /* Bits 0-16: Point mask */
+    unsigned int reserved   :16;    /* Bits 5-31: Reserved for future features */
 } MPS2FBTouchHeader;
 
 struct MPS2FBState {
@@ -101,10 +103,6 @@ struct MPS2FBState {
 
     /* Touch state */
     QemuInputHandlerState *touch_handler;
-
-    uint16_t touch_x;
-    uint16_t touch_y;
-    uint8_t touch_pressed;
 
     /* Multi-touch state */
     MPS2FBTouchHeader touch_header;
@@ -128,32 +126,6 @@ static void mps2fb_update_irq(MPS2FBState *s)
     }
 }
 
-static void mps2fb_update_touch_state(MPS2FBState *s)
-{
-    /* Update the touch header with current number of active points */
-    int active_points = 0;
-
-    for (int i = 0; i < MAX_TOUCH_POINTS; i++) {
-        if (s->touch_points[i].pressed) {
-            active_points++;
-        }
-    }
-
-    s->touch_header.num_points = active_points;
-
-    /* For backward compatibility, update single touch state from first active point */
-    for (int i = 0; i < MAX_TOUCH_POINTS; i++) {
-        if (s->touch_points[i].pressed) {
-            s->touch_x = s->touch_points[i].x;
-            s->touch_y = s->touch_points[i].y;
-            s->touch_pressed = 1;
-            return;
-        }
-    }
-
-    /* No active points */
-    s->touch_pressed = 0;
-}
 
 static uint64_t control_region_read(void *opaque, hwaddr addr, unsigned size)
 {
@@ -188,7 +160,7 @@ static uint64_t control_region_read(void *opaque, hwaddr addr, unsigned size)
                     val = point->pressed;
                     break;
                 case POINT_ID_OFFSET:
-                    val = point->track_id;
+                    val = *(uint32_t *)&point->track_id;
                     break;
                 default:
                     qemu_log_mask(LOG_UNIMP,
@@ -283,6 +255,7 @@ static const GraphicHwOps mps2fb_ops = {
     .gfx_update  = mps2fb_update,
 };
 
+
 static void mps2fb_touch_event(DeviceState *dev,
                               QemuConsole *con,
                               InputEvent *evt)
@@ -302,14 +275,16 @@ static void mps2fb_touch_event(DeviceState *dev,
                 // point->pressed = 1;
                 // point->track_id = mt->tracking_id;
                 // qemu_log_mask(LOG_UNIMP, "track_id assign %ld, slot id %ld\n", mt->tracking_id, mt->slot);
-
             }
             break;
         case INPUT_MULTI_TOUCH_TYPE_DATA:
-            {
-                MPS2FBTouchPoint *point = &s->touch_points[mt->slot];
+            if (mt->slot < MAX_TOUCH_POINTS) {
+                const int i = mt->slot + MULTI_TOUCH_SLOT_OFFSET;
+                MPS2FBTouchPoint *point = &s->touch_points[i];
 
                 point->pressed = 1;
+                s->touch_header.points_mask |= (1 << i);
+                point->track_id = mt->tracking_id;
 
                 qemu_log_mask(LOG_UNIMP, "track_in data  %ld, slot id %ld\n", mt->tracking_id, mt->slot);
                 if (mt->axis == INPUT_AXIS_X) {
@@ -321,17 +296,22 @@ static void mps2fb_touch_event(DeviceState *dev,
                 } else {
                     qemu_log_mask(LOG_UNIMP, "Unknow\n");
                 }
+
                 touch_state_changed = 1;
-                break;
             }
+            break;
 
         case INPUT_MULTI_TOUCH_TYPE_END:
         case INPUT_MULTI_TOUCH_TYPE_CANCEL:
             if (mt->slot < MAX_TOUCH_POINTS) {
-                MPS2FBTouchPoint *point = &s->touch_points[mt->slot];
-                point->track_id = mt->tracking_id; // == -1
-                qemu_log_mask(LOG_UNIMP, "track_id release %ld, slot id %ld\n", mt->tracking_id, mt->slot);
+                const int i = mt->slot + MULTI_TOUCH_SLOT_OFFSET;
+                MPS2FBTouchPoint *point = &s->touch_points[i];
+
                 point->pressed = 0;
+                s->touch_header.points_mask &= ~(1 << i);
+                point->track_id = mt->tracking_id; // == -1
+
+                qemu_log_mask(LOG_UNIMP, "track_id release %ld, slot id %ld\n", mt->tracking_id, mt->slot);
                 touch_state_changed = 1;
             }
             break;
@@ -345,9 +325,17 @@ static void mps2fb_touch_event(DeviceState *dev,
     } else if (evt->type == INPUT_EVENT_KIND_BTN) {
         if (evt->u.btn.data->button == INPUT_BUTTON_LEFT) {
             /* Single touch - use slot 0 */
-            uint8_t old_pressed = s->touch_points[0].pressed;
-            s->touch_points[0].pressed = evt->u.btn.data->down ? 1 : 0;
-            s->touch_points[0].track_id = 0;
+            uint8_t old_pressed = s->touch_points[MOUSE_SLOT].pressed;
+            int pressed = evt->u.btn.data->down;
+
+            s->touch_points[MOUSE_SLOT].pressed = pressed ? 1 : 0;
+            s->touch_points[MOUSE_SLOT].track_id = pressed ? 0 : -1;
+            if (pressed) {
+                s->touch_header.points_mask |= (1 << MOUSE_SLOT);
+            } else {
+                s->touch_header.points_mask &= ~(1 << MOUSE_SLOT);
+            }
+
             touch_state_changed = (old_pressed != s->touch_points[0].pressed);
         }
     } else if (evt->type == INPUT_EVENT_KIND_ABS) {
@@ -370,7 +358,6 @@ static void mps2fb_touch_event(DeviceState *dev,
 
     /* Update touch state and generate IRQ if state changed */
     if (touch_state_changed) {
-        mps2fb_update_touch_state(s);
         mps2fb_update_irq(s);
     }
 }
@@ -406,19 +393,15 @@ static void mps2fb_realize(DeviceState *dev, Error **errp)
     s->ctrl.enable_irq = 0;
     s->ctrl.reserved = 0;
 
-    s->touch_header.num_points = 0;
+    s->touch_header.points_mask = 0;
     s->touch_header.reserved = 0;
-
-    s->touch_x = 0;
-    s->touch_y = 0;
-    s->touch_pressed = 0;
 
     /* Initialize all touch points */
     for (int i = 0; i < MAX_TOUCH_POINTS; i++) {
         s->touch_points[i].x = 0;
         s->touch_points[i].y = 0;
         s->touch_points[i].pressed = 0;
-        s->touch_points[i].track_id = i;
+        s->touch_points[i].track_id = -1;
     }
 
     s->invalidate = 1;
