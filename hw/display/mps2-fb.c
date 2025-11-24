@@ -53,6 +53,9 @@ OBJECT_DECLARE_SIMPLE_TYPE(MPS2FBState, MPS2FB)
 
 /* Maximum number of touch points supported */
 #define MAX_TOUCH_POINTS    10
+
+// by default, slot_id/track_id from qemu start from 1, now make slot_id start from 0
+// make mouse and first touch point use same slot
 #define MULTI_TOUCH_SLOT_OFFSET -1
 #define MOUSE_SLOT 0
 
@@ -278,7 +281,7 @@ static void mps2fb_touch_event(DeviceState *dev,
             }
             break;
         case INPUT_MULTI_TOUCH_TYPE_DATA:
-            if (mt->slot < MAX_TOUCH_POINTS) {
+            if (mt->slot + MULTI_TOUCH_SLOT_OFFSET < MAX_TOUCH_POINTS) {
                 const int i = mt->slot + MULTI_TOUCH_SLOT_OFFSET;
                 MPS2FBTouchPoint *point = &s->touch_points[i];
 
@@ -287,11 +290,12 @@ static void mps2fb_touch_event(DeviceState *dev,
                 point->track_id = mt->tracking_id;
 
                 qemu_log_mask(LOG_UNIMP, "track_in data  %ld, slot id %ld\n", mt->tracking_id, mt->slot);
+                uint64_t value = mt->value = (mt->value < 0) ? 0 : ((mt->value > INPUT_EVENT_ABS_MAX) ? INPUT_EVENT_ABS_MAX - 1 : mt->value);
                 if (mt->axis == INPUT_AXIS_X) {
-                    point->x = ((uint64_t)mt->value * (uint64_t)s->cols) / (uint64_t)INPUT_EVENT_ABS_MAX;
+                    point->x = ((uint64_t)value * (uint64_t)s->cols) / (uint64_t)INPUT_EVENT_ABS_MAX;
                     qemu_log_mask(LOG_UNIMP, "x is %d\n", point->x);
                 } else if  (mt->axis == INPUT_AXIS_Y) {
-                    point->y = ((uint64_t)mt->value * (uint64_t)s->rows) / (uint64_t)INPUT_EVENT_ABS_MAX;
+                    point->y = ((uint64_t)value * (uint64_t)s->rows) / (uint64_t)INPUT_EVENT_ABS_MAX;
                     qemu_log_mask(LOG_UNIMP, "y is %d\n", point->y);
                 } else {
                     qemu_log_mask(LOG_UNIMP, "Unknow\n");
@@ -303,7 +307,7 @@ static void mps2fb_touch_event(DeviceState *dev,
 
         case INPUT_MULTI_TOUCH_TYPE_END:
         case INPUT_MULTI_TOUCH_TYPE_CANCEL:
-            if (mt->slot < MAX_TOUCH_POINTS) {
+            if (mt->slot + MULTI_TOUCH_SLOT_OFFSET < MAX_TOUCH_POINTS) {
                 const int i = mt->slot + MULTI_TOUCH_SLOT_OFFSET;
                 MPS2FBTouchPoint *point = &s->touch_points[i];
 
@@ -346,13 +350,13 @@ static void mps2fb_touch_event(DeviceState *dev,
 
         /* Single touch - use slot 0 */
         if (axis == INPUT_AXIS_X) {
-            uint16_t old_x = s->touch_points[0].x;
-            s->touch_points[0].x = scaled_value;
-            touch_state_changed = (old_x != s->touch_points[0].x);
+            uint16_t old_x = s->touch_points[MOUSE_SLOT].x;
+            s->touch_points[MOUSE_SLOT].x = scaled_value;
+            touch_state_changed = (old_x != s->touch_points[MOUSE_SLOT].x);
         } else if (axis == INPUT_AXIS_Y) {
-            uint16_t old_y = s->touch_points[0].y;
-            s->touch_points[0].y = scaled_value;
-            touch_state_changed = (old_y != s->touch_points[0].y);
+            uint16_t old_y = s->touch_points[MOUSE_SLOT].y;
+            s->touch_points[MOUSE_SLOT].y = scaled_value;
+            touch_state_changed = (old_y != s->touch_points[MOUSE_SLOT].y);
         }
     }
 
