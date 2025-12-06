@@ -50,6 +50,9 @@
 #include "hw/qdev-clock.h"
 #include "qobject/qlist.h"
 #include "qom/object.h"
+#include "hw/sysbus.h"
+#include "hw/display/mps2-fb.h"
+#include "qemu/notify.h"
 
 typedef enum MPS2FPGAType {
     FPGA_AN385,
@@ -89,6 +92,7 @@ struct MPS2MachineState {
     CMSDKAPBTimer timer[2];
     Clock *sysclk;
     Clock *refclk;
+    Notifier notifier;  /* For dynamic device mapping */
 };
 
 #define TYPE_MPS2_MACHINE "mps2"
@@ -130,6 +134,32 @@ static void make_ram_alias(MemoryRegion *mr, const char *name,
     memory_region_init_alias(mr, NULL, name, orig, 0,
                              memory_region_size(orig));
     memory_region_add_subregion(get_system_memory(), base, mr);
+}
+
+/* Callback to map dynamically added sysbus devices */
+static void mps2_map_dynamic_sysbus_device(SysBusDevice *sbdev, void *opaque)
+{
+    DeviceState *armv7m = opaque;
+    const char *type = object_get_typename(OBJECT(sbdev));
+
+    if (strcmp(type, TYPE_MPS2_FB) == 0) {
+        /* Map framebuffer memory region (index 0) at 0x41000000 */
+        sysbus_mmio_map(sbdev, 0, 0x41000000);
+        /* Map control region (index 1) at 0x41001000 */
+        sysbus_mmio_map(sbdev, 1, 0x41001000);
+        /* Connect touch IRQ (index 0) to ARMv7M IRQ 31 */
+        sysbus_connect_irq(sbdev, 0, qdev_get_gpio_in(armv7m, 31));
+    }
+}
+
+static void mps2_machine_init_done(Notifier *notifier, void *data)
+{
+    MPS2MachineState *mms = container_of(notifier, MPS2MachineState, notifier);
+    // MachineState *machine = MACHINE(mms);
+    DeviceState *armv7m = DEVICE(&mms->armv7m);
+
+    /* Map any dynamically added sysbus devices */
+    foreach_dynamic_sysbus_device(mps2_map_dynamic_sysbus_device, armv7m);
 }
 
 static void mps2_common_init(MachineState *machine)
@@ -241,6 +271,10 @@ static void mps2_common_init(MachineState *machine)
                              OBJECT(system_memory), &error_abort);
     sysbus_realize(SYS_BUS_DEVICE(&mms->armv7m), &error_fatal);
 
+    /* Register notifier to map dynamic devices after machine init */
+    mms->notifier.notify = mps2_machine_init_done;
+    qemu_add_machine_init_done_notifier(&mms->notifier);
+
     create_unimplemented_device("zbtsmram mirror", 0x00400000, 0x00400000);
     create_unimplemented_device("RESERVED 1", 0x00800000, 0x00800000);
     create_unimplemented_device("Block RAM", 0x01000000, 0x00010000);
@@ -260,15 +294,15 @@ static void mps2_common_init(MachineState *machine)
 
     create_unimplemented_device("RESERVED 4", 0x40030000, 0x001D0000);
     /* Framebuffer */
-    DeviceState *fbdev = qdev_new("mps2-fb");
-    qdev_prop_set_uint32(fbdev, "cols", 640);
-    qdev_prop_set_uint32(fbdev, "rows", 480);
-    sysbus_realize_and_unref(SYS_BUS_DEVICE(fbdev), &error_fatal);
-    sysbus_mmio_map(SYS_BUS_DEVICE(fbdev), 0, 0x41000000);
-    sysbus_mmio_map(SYS_BUS_DEVICE(fbdev), 1, 0x41001000);
-
-    /* Connect touch IRQ */
-    sysbus_connect_irq(SYS_BUS_DEVICE(fbdev), 0, qdev_get_gpio_in(armv7m, 31));
+    // DeviceState *fbdev = qdev_new("mps2-fb");
+    // qdev_prop_set_uint32(fbdev, "cols", 640);
+    // qdev_prop_set_uint32(fbdev, "rows", 480);
+    // sysbus_realize_and_unref(SYS_BUS_DEVICE(fbdev), &error_fatal);
+    // sysbus_mmio_map(SYS_BUS_DEVICE(fbdev), 0, 0x41000000);
+    // sysbus_mmio_map(SYS_BUS_DEVICE(fbdev), 1, 0x41001000);
+    //
+    // /* Connect touch IRQ */
+    // sysbus_connect_irq(SYS_BUS_DEVICE(fbdev), 0, qdev_get_gpio_in(armv7m, 31));
 
     switch (mmc->fpga_type) {
     case FPGA_AN385:
@@ -477,7 +511,7 @@ static void mps2_class_init(ObjectClass *oc, const void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
 
-    machine_class_allow_dynamic_sysbus_dev(mc, "mps2-fb");
+    machine_class_allow_dynamic_sysbus_dev(mc, TYPE_MPS2_FB);
 
     mc->init = mps2_common_init;
     mc->max_cpus = 1;
