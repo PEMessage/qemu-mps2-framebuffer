@@ -86,10 +86,12 @@ int bitbang_i2c_set(bitbang_i2c_interface *i2c, int line, int level)
     }
 
     if (line == BITBANG_I2C_SDA) {
+        // SDA EdgeCheck
         if (level == i2c->last_data) {
             return bitbang_i2c_nop(i2c);
         }
         i2c->last_data = level;
+        // SDA is Edge && SCL is 1
         if (i2c->last_clock == 0) {
             return bitbang_i2c_nop(i2c);
         }
@@ -108,7 +110,9 @@ int bitbang_i2c_set(bitbang_i2c_interface *i2c, int line, int level)
     if (i2c->last_clock == level) {
         return bitbang_i2c_nop(i2c);
     }
+    // SCL Edge check
     i2c->last_clock = level;
+    // SCL is UpEdge
     if (level == 0) {
         /* State is set/read at the start of the clock pulse.
            release the data line at the end.  */
@@ -132,6 +136,8 @@ int bitbang_i2c_set(bitbang_i2c_interface *i2c, int line, int level)
         if (i2c->current_addr < 0) {
             i2c->current_addr = i2c->buffer;
             trace_bitbang_i2c_addr(i2c->current_addr);
+            // NOTICE: what we get from io, will be process by (ADDR >> 1!!!)
+            // So, `-device i2c-echo,address=(0x50 >> 1)` == 0x28
             ret = i2c_start_transfer(i2c->bus, i2c->current_addr >> 1,
                                      i2c->current_addr & 1);
         } else {

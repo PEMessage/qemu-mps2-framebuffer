@@ -14,6 +14,7 @@
 #include "qapi/error.h"
 #include "qemu/module.h"
 #include "qemu/main-loop.h"
+#include "qemu/log.h"
 #include "trace.h"
 
 #define I2C_BROADCAST 0x00
@@ -87,6 +88,15 @@ bool i2c_scan_bus(I2CBus *bus, uint8_t address, bool broadcast,
         DeviceState *qdev = kid->child;
         I2CSlave *candidate = I2C_SLAVE(qdev);
         I2CSlaveClass *sc = I2C_SLAVE_GET_CLASS(candidate);
+
+        qemu_log_mask(LOG_UNIMP,
+                "I2C Scan: Checking device '%s' (type: %s) at host 0x%02x -- device 0x%02x\n",
+                qdev->id ? qdev->id : "unnamed",
+                object_get_typename(OBJECT(qdev)),
+                address,
+                candidate->address
+                );
+
 
         if (sc->match_and_add(candidate, address, broadcast, current_devs)) {
             if (!broadcast) {
